@@ -1,0 +1,6 @@
+__pycache__
+*.swp
+*.pyc
+
+# Python Package Stuff
+*.egg-info

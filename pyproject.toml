@@ -1,0 +1,21 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "vortran_laser"
+authors = [{name = "Joshua Vasquez",
+            email = "joshua.vasquez@alleninstitute.org"}]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python='>=3.6'
+classifiers = ["License :: OSI Approved :: MIT License"]
+dynamic = ["version", "description"]
+description-file='README.md'
+classifiers=[
+    'Development Status :: 4 - Beta',
+    'Programming Language :: Python'
+]
+dependencies = [
+    'pyserial'
+]
