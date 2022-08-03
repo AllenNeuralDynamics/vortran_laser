@@ -2,12 +2,18 @@
 
 import sys
 from enum import Enum, IntEnum
-from serial import Serial, EIGHTBITS, STOPBITS_ONE, PARITY_NONE
+from time import perf_counter
+
+import serial
+from serial import Serial, EIGHTBITS, STOPBITS_ONE, PARITY_NONE, \
+    SerialTimeoutException
 
 # Define StrEnums if they don't yet exist.
-if sys.version_info < (3,11):
+if sys.version_info < (3, 11):
     class StrEnum(str, Enum):
         pass
+else:
+    from enum import StrEnum
 
 
 class Cmd(StrEnum):
@@ -61,6 +67,7 @@ class Query(StrEnum):
 
 # Requesting a FaultCode will return a 16-bit number who's bitfields
 # represent which faults are active.
+# Many fields (bits) can be asserted at once.
 class FaultCodeField(IntEnum):
     LASER_EMISSION_ACTIVE = 0
     STANDBY = 1
@@ -81,6 +88,14 @@ class FaultCodeField(IntEnum):
     DIODE_END_OF_LIFE_INDICATOR = 32768
 
 
+# Laser State Representation
+class LaserState(IntEnum):
+    LASER_EMISSION_ACTIVE = 0,
+    STANDBY = 1,
+    WARMUP = 2,
+    FAULT = 3  # True if FaultCode > 32
+
+
 # Boolean command value.
 class BoolVal(StrEnum):
     OFF = "0"
@@ -88,14 +103,14 @@ class BoolVal(StrEnum):
 
 
 STRADUS_COM_SETUP = \
-{
-    "baudrate": 19200,
-    "bytesize": EIGHTBITS,
-    "parity": PARITY_NONE,
-    "stopbits": STOPBITS_ONE,
-    "xonxoff": False,
-    "timeout": 0.25
-}
+    {
+        "baudrate": 19200,
+        "bytesize": EIGHTBITS,
+        "parity": PARITY_NONE,
+        "stopbits": STOPBITS_ONE,
+        "xonxoff": False,
+        "timeout": 1
+    }
 
 
 class StradusLaser:
@@ -105,10 +120,17 @@ class StradusLaser:
     def __init__(self, port: str = "/dev/ttyUSB0"):
         self.ser = Serial(port, **STRADUS_COM_SETUP)
         self.ser.reset_input_buffer()
-        # Put the interface into a known state to simplify communication.
-        self._disable_echo()
-        self._disable_prompt()
+        # Since we're likely connected over an RS232-to-usb-serial interface,
+        # ask for some sort of reply to make sure we're not timing out.
+        try:
+            # Put the interface into a known state to simplify communication.
+            self._disable_echo()
+            self._disable_prompt()
+        except SerialTimeoutException:
+            print(f"Connected to '{port}' but the device is not responding.")
+            raise
 
+    # Convenience functions
     def enable(self):
         """Enable emission."""
         self.set(Cmd.LaserEmission, BoolVal.ON)
@@ -117,25 +139,39 @@ class StradusLaser:
         """disable emission."""
         self.set(Cmd.LaserEmission, BoolVal.OFF)
 
+    def disable_cdrh(self):
+        """disable 5-second delay"""
+        self.set(Cmd.FiveSecEmissionDelay, BoolVal.OFF)
+
     def set_external_power_control(self):
+        """Configure the laser to be controlled by an external analog input.
+
+        0 to max output power is linearlly mapped to an analog voltage of 0-5V
+        where any present power is ignored (datasheet, pg67).
+        """
         self.set(Cmd.ExternalPowerControl, BoolVal.ON)
 
-
+    def get_state(self) -> LaserState:
+        fault_code = int(self.get(Query.FaultCode))
+        if fault_code > LaserState.FAULT.value:
+            return LaserState.FAULT
+        return LaserState(fault_code)
 
     def get_faults(self):
-        """return a list of fault codes."""
-        fault_code = int(self.get(FaultCode))
+        """return a list of faults or empty list if no faults are present."""
         faults = []
-        for index, fault_code_field in enumerate(FaultCodeField):
+        try:
+            fault_code = int(self.get(Query.FaultCode))
+        except ValueError:
+            return None
+        for index, field in enumerate(FaultCodeField):
+            if bin(fault_code)[-1] == '1':
+                faults.append(field)
             fault_code = fault_code >> 1
-            if bin(fault_code)[-1]:
-                faults.append(fault_code_field)
-        return faults
+            return faults
 
-    def clear_faults(self):
-        pass
-
-    # Low level Interface.
+    # Low level Interface. All commands and queries can be accessed
+    # through the get/set interface.
     def _disable_echo(self):
         """Disable echo so that outgoing chars don't get echoed back."""
         self.set(Cmd.Echo, BoolVal.OFF)
@@ -153,29 +189,35 @@ class StradusLaser:
         # TODO: is this always empty string?
         return self._send(f"{cmd}={value}")
 
-    def _send(self, msg: str, no_reply: bool = False) -> str:
+    def _send(self, msg: str, raise_timeout: bool = True) -> str:
         """send a message and return the reply.
 
-        :param noreply: true if this particular command does not issue a reply.
+        :param msg: the message to send in string format
+        :param raise_timeout: bool to indicate if we should raise an exception
+            if we timed out.
 
         :returns: the reply (without line formatting chars) in str format
-            or emptystring if no reply.
+            or emptystring if no reply. Raises a timeout exception if flagged
+            to do so.
         """
-        # Laser commands are bookended with '\r\n' at the start and end
-        # of a reply. If a command responds with no reply, then only a single
-        # '\r\n' is returned.
+        # Note: timing out from a serial port read does not throw an exception,
+        #   so we need to do this manually.
+
+        # all outgoing commands are bookended with a '\r\n' at the beginning
+        # and end of the message.
         self.ser.write(f"{msg}\r".encode('ascii'))
+        start_time = perf_counter()
+        # Read the first '\r\n'.
         reply = self.ser.read_until(StradusLaser.REPLY_TERMINATION)
-        if no_reply:
-            return ""
-        # If this command actually doesn't reply, then we will just timeour
-        # and return emptystring.
+        # Raise a timeout if we got no reply and have been flagged to do so.
+        if not len(reply) and raise_timeout and \
+                perf_counter()-start_time > self.ser.timeout:
+            raise SerialTimeoutException
+        start_time = perf_counter()  # Reset this.
+        # Read the message and the last '\r\n'.
         reply = self.ser.read_until(StradusLaser.REPLY_TERMINATION)
+        if not len(reply) and raise_timeout and \
+                perf_counter()-start_time > self.ser.timeout:
+            raise SerialTimeoutException
         return reply.rstrip(StradusLaser.REPLY_TERMINATION).decode('utf-8')
 
-
-if __name__ == "__main__":
-
-    from inpromptu import Inpromptu
-    laserui = Inpromptu(StradusLaser('/dev/ttyUSB0'))
-    laserui.cmdloop()
