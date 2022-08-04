@@ -2,9 +2,8 @@
 
 import sys
 from enum import Enum, IntEnum
+from functools import cache
 from time import perf_counter
-
-import serial
 from serial import Serial, EIGHTBITS, STOPBITS_ONE, PARITY_NONE, \
     SerialTimeoutException
 
@@ -21,7 +20,7 @@ class Cmd(StrEnum):
     Prompt = "PROMPT"  # Enable(1)/Disable(0) a prompt
     LaserDriverControlMode = "C"  # Set laser mode: [Power=0, Current=1]
     ClearFaultCode = "CFC"  # Clear stored fault code
-    RecallFaultCode =  "RFC"  # Recall Stored Fault codes
+    RecallFaultCode = "RFC"  # Recall Stored Fault codes
     FiveSecEmissionDelay = "DELAY"  # Enable/Disable 5-second CDRH delay
     ExternalPowerControl = "EPC"  # Enable(1)/Disable(0) External power control
     LaserEmission = "LE"  # Enable/Disable Laser Emission.
@@ -51,7 +50,7 @@ class Query(StrEnum):
     LaserCurrent = "?LC"  # Request measured laser current
     LaserCurrentSetting = "?LCS"  # Request desired laser current setpoint
     LaserEmission = "?LE"  # Request laser emission status.
-    LaserOperatingHourse = "?LH"  # Request laser operating hours.
+    LaserOperatingHours = "?LH"  # Request laser operating hours.
     LaserIdentification = "?LI"  # Request Laser identification.
     LaserPower = "?LP"  # Request measured laser power.
     LaserPowerSetting = "?LPS"  # Request desired laser power setpoint.
@@ -89,17 +88,20 @@ class FaultCodeField(IntEnum):
 
 
 # Laser State Representation
-class LaserState(IntEnum):
+class StradusState(IntEnum):
     LASER_EMISSION_ACTIVE = 0,
     STANDBY = 1,
     WARMUP = 2,
     FAULT = 3  # True if FaultCode > 32
 
 
-# Boolean command value.
+# Boolean command value that can also be compared like a boolean.
 class BoolVal(StrEnum):
     OFF = "0"
     ON = "1"
+
+    def __bool__(self):
+        return self.value == "1"
 
 
 STRADUS_COM_SETUP = \
@@ -139,6 +141,41 @@ class StradusLaser:
         """disable emission."""
         self.set(Cmd.LaserEmission, BoolVal.OFF)
 
+    @property
+    @cache
+    def wavelength(self):
+        """return the current wavelength."""
+        return int(self.get(Query.LaserWavelength))
+
+    @property
+    def temperature(self):
+        """Return the current temperature as measured from the base plate."""
+        return self.get(Query.BasePlateTemperature)
+
+    @property
+    def state(self) -> StradusState:
+        """Return the laser state as a StradusState Enum.
+
+        Note: The "FAULT" state encompasses many cases. A list of
+            all specific fault codes can be accessed with get_faults().
+        """
+        fault_code = int(self.get(Query.FaultCode))
+        # All Fault Codes >=4 represent some sort of issue.
+        # Fault Codes <4 relate to laser state.
+        if fault_code > StradusState.FAULT.value:
+            return StradusState.FAULT
+        return StradusState(fault_code)
+
+    @property
+    def interlock_is_closed(self):
+        """True if the key is turned and laser is armed; False otherwise."""
+        return True if BoolVal(self.get(Query.InterlockStatus)) else False
+
+    @property
+    def laser_is_emitting(self):
+        """True if the laser is emitting. False otherwise."""
+        return True if BoolVal(self.get(Query.LaserEmission)) else False
+
     def disable_cdrh(self):
         """disable 5-second delay"""
         self.set(Cmd.FiveSecEmissionDelay, BoolVal.OFF)
@@ -150,12 +187,6 @@ class StradusLaser:
         where any present power is ignored (datasheet, pg67).
         """
         self.set(Cmd.ExternalPowerControl, BoolVal.ON)
-
-    def get_state(self) -> LaserState:
-        fault_code = int(self.get(Query.FaultCode))
-        if fault_code > LaserState.FAULT.value:
-            return LaserState.FAULT
-        return LaserState(fault_code)
 
     def get_faults(self):
         """return a list of faults or empty list if no faults are present."""
@@ -170,8 +201,7 @@ class StradusLaser:
             fault_code = fault_code >> 1
             return faults
 
-    # Low level Interface. All commands and queries can be accessed
-    # through the get/set interface.
+    # Utility functions to put the device in a known state.
     def _disable_echo(self):
         """Disable echo so that outgoing chars don't get echoed back."""
         self.set(Cmd.Echo, BoolVal.OFF)
@@ -180,10 +210,12 @@ class StradusLaser:
         """Disable prompt so that replies don't return with a prompt prefix."""
         self.set(Cmd.Prompt, BoolVal.OFF)
 
+    # Low level Interface. All commands and queries can be accessed
+    # through the get/set interface.
     def get(self, setting: Query) -> str:
         """Request a setting from the device."""
         reply = self._send(setting.value)
-        return reply.lstrip(f"?{setting}=")
+        return reply.lstrip(f"?{setting}= ")
 
     def set(self, cmd: Cmd, value: str) -> str:
         # TODO: is this always empty string?
@@ -200,10 +232,10 @@ class StradusLaser:
             or emptystring if no reply. Raises a timeout exception if flagged
             to do so.
         """
-        # Note: timing out from a serial port read does not throw an exception,
+        # Note: Timing out on a serial port read does not throw an exception,
         #   so we need to do this manually.
 
-        # all outgoing commands are bookended with a '\r\n' at the beginning
+        # All outgoing commands are bookended with a '\r\n' at the beginning
         # and end of the message.
         self.ser.write(f"{msg}\r".encode('ascii'))
         start_time = perf_counter()
@@ -213,11 +245,10 @@ class StradusLaser:
         if not len(reply) and raise_timeout and \
                 perf_counter()-start_time > self.ser.timeout:
             raise SerialTimeoutException
-        start_time = perf_counter()  # Reset this.
+        start_time = perf_counter()  # Reset timeout counter.
         # Read the message and the last '\r\n'.
         reply = self.ser.read_until(StradusLaser.REPLY_TERMINATION)
         if not len(reply) and raise_timeout and \
                 perf_counter()-start_time > self.ser.timeout:
             raise SerialTimeoutException
         return reply.rstrip(StradusLaser.REPLY_TERMINATION).decode('utf-8')
-
