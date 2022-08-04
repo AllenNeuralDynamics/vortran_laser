@@ -195,7 +195,10 @@ class StradusLaser:
             fault_code = int(self.get(Query.FaultCode))
         except ValueError:
             return None
-        for index, field in enumerate(FaultCodeField):
+        # Skip first Enum (LASER_EMISSION_ACTIVE), which is not really a fault.
+        fault_code_fields = iter(FaultCodeField)
+        next(fault_code_fields)
+        for index, field in enumerate(fault_code_fields):
             if bin(fault_code)[-1] == '1':
                 faults.append(field)
             fault_code = fault_code >> 1
@@ -218,7 +221,6 @@ class StradusLaser:
         return reply.lstrip(f"?{setting}= ")
 
     def set(self, cmd: Cmd, value: str) -> str:
-        # TODO: is this always empty string?
         return self._send(f"{cmd}={value}")
 
     def _send(self, msg: str, raise_timeout: bool = True) -> str:
