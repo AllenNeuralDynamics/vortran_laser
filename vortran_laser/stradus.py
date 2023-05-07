@@ -86,13 +86,18 @@ class StradusLaser:
         """disable 5-second delay"""
         self.set(Cmd.FiveSecEmissionDelay, BoolVal.OFF)
 
-    def set_external_power_control(self):
+    def set_external_control(self, state: bool):
         """Configure the laser to be controlled by an external analog input.
 
-        0 to max output power is linearlly mapped to an analog voltage of 0-5V
+        0 to max output power is linearly mapped to an analog voltage of 0-5V
         where any present power is ignored (datasheet, pg67).
         """
-        self.set(Cmd.ExternalPowerControl, BoolVal.ON)
+        device_val = BoolVal.ON if bool else BoolVal.OFF
+        self.set(Cmd.ExternalPowerControl, device_val)
+
+    def get_max_power(self):
+        """Get maximum laser power"""
+        self.get(Query.MaximumLaserPower)
 
     def get_faults(self):
         """return a list of faults or empty list if no faults are present."""
@@ -109,6 +114,29 @@ class StradusLaser:
                 faults.append(field)
             fault_code = fault_code >> 1
             return faults
+
+    def set_power(self, value):
+        """Set power"""
+        self.set(Cmd.LaserPower, value)
+
+    def get_power(self):
+        """Get power set point"""
+        self.get(Query.LaserPowerSetting)
+
+    def set_modulation_mode(self, mode:str):
+        """Sets modulation mode of laser: digital or analog"""
+        if mode == 'digital':
+            self.set(Cmd.PulseMode, 0)
+        else:
+            self.set(Cmd.PulseMode, 1)
+
+    def set_constant_power(self):
+        """Set constant power"""
+        self.set(Cmd.LaserDriverControlMode, 0)
+
+    def set_constant_current(self):
+        """Set constant power"""
+        self.set(Cmd.LaserDriverControlMode, 1)
 
     # Utility functions to put the device in a known state.
     def _disable_echo(self):
