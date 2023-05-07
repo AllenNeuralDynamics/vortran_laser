@@ -130,13 +130,13 @@ class StradusLaser:
         else:
             self.set(Cmd.PulseMode, 1)
 
-    def set_constant_power(self):
-        """Set constant power"""
-        self.set(Cmd.LaserDriverControlMode, 0)
+    def set_laser_driver_control_mode(self, mode):
+        """Set constant current or power mode"""
 
-    def set_constant_current(self):
-        """Set constant power"""
-        self.set(Cmd.LaserDriverControlMode, 1)
+        if mode == 'current':
+            self.set(Cmd.LaserDriverControlMode, 1)
+        elif mode == 'power':
+            self.set(Cmd.LaserDriverControlMode, 0)
 
     # Utility functions to put the device in a known state.
     def _disable_echo(self):
