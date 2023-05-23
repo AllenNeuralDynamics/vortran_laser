@@ -86,18 +86,19 @@ class StradusLaser:
         """disable 5-second delay"""
         self.set(Cmd.FiveSecEmissionDelay, BoolVal.OFF)
 
-    def set_external_control(self, state: bool):
+    def set_external_control(self, state: state):
         """Configure the laser to be controlled by an external analog input.
 
         0 to max output power is linearly mapped to an analog voltage of 0-5V
         where any present power is ignored (datasheet, pg67).
         """
-        device_val = BoolVal.ON if bool else BoolVal.OFF
+
+        device_val = BoolVal.ON if state else BoolVal.OFF
         self.set(Cmd.ExternalPowerControl, device_val)
 
     def get_max_power(self):
         """Get maximum laser power"""
-        self.get(Query.MaximumLaserPower)
+        return self.get(Query.MaximumLaserPower)
 
     def get_faults(self):
         """return a list of faults or empty list if no faults are present."""
@@ -116,19 +117,28 @@ class StradusLaser:
             return faults
 
     def set_power(self, value):
-        """Set power"""
-        self.set(Cmd.LaserPower, value)
+        """Set power. If in digital modulation mode set pulse power else set power"""
+
+        if self.get(Query.PulseMode) == '1':
+            self.set(Cmd.PulsePower, value)
+        else:
+            self.set(Cmd.LaserPower, value)
 
     def get_power(self):
-        """Get power set point"""
-        self.get(Query.LaserPowerSetting)
+        """Get power set point. If in digital modulation mode return peak power else return set power"""
+
+        if self.get(Query.PulseMode) == '1':
+            return self.get(Query.PulsePower)
+
+        else:
+            return self.get(Query.LaserPowerSetting)
 
     def set_modulation_mode(self, mode:str):
         """Sets modulation mode of laser: digital or analog"""
         if mode == 'digital':
-            self.set(Cmd.PulseMode, 0)
-        else:
             self.set(Cmd.PulseMode, 1)
+        else:
+            self.set(Cmd.PulseMode, 0)
 
     def set_laser_driver_control_mode(self, mode):
         """Set constant current or power mode"""
@@ -175,11 +185,11 @@ class StradusLaser:
         # and end of the message.
         msg = f"{msg}\r"
         self.log.debug(f"Sending: {repr(msg.encode('ascii'))}")
+        #print(f"Sending: {repr(msg.encode('ascii'))}")
         self.ser.write(f"{msg}".encode('ascii'))
         start_time = perf_counter()
         # Read the first '\r\n'.
         reply = self.ser.read_until(StradusLaser.REPLY_TERMINATION)
-        self.log.debug(f"Received: {repr(reply)}")
         # Raise a timeout if we got no reply and have been flagged to do so.
         if not len(reply) and raise_timeout and \
                 perf_counter()-start_time > self.ser.timeout:
@@ -188,6 +198,7 @@ class StradusLaser:
         # Read the message and the last '\r\n'.
         reply = self.ser.read_until(StradusLaser.REPLY_TERMINATION)
         self.log.debug(f"Received: {repr(reply)}")
+        #print(f"Received: {repr(reply)}")
         if not len(reply) and raise_timeout and \
                 perf_counter()-start_time > self.ser.timeout:
             raise SerialTimeoutException

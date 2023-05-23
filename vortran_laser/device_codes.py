@@ -22,7 +22,7 @@ class Cmd(StrEnum):
     LaserPower = "LP"  # Set laser power ###.# [mW]
     LaserCurrent = "LC"  # Set laser current ###.# [mA]
     PulsePower = "PP"  # Set Peak Pulse Power [0-1000] [mW]
-    PulseMode = "PUL"  # Enable(1)/Disable(0) Pulse Mode
+    PulseMode = "PUL"  # Enable(1)/Disable(0) Pulse Mode (Digital Modulation)
     ThermalElectricCooler = "TEC"  # Toggle TEC [Off=0, On=1]
 
 
