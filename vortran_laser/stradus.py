@@ -23,7 +23,11 @@ class StradusLaser:
 
     REPLY_TERMINATION = b'\r\n'
 
-    def __init__(self, port: str = "/dev/ttyUSB0"):
+    def __init__(self, port: str = "/dev/ttyUSB0",
+                 modulation_mode: str = None,
+                 driver_control_mode: str = None,
+                 external_control_mode: str = None):
+
         # Create a logger for this port instance.
         self.log = logging.getLogger(f"{__name__}.{self.__class__.__name__}.{port}")
         self.ser = Serial(port, **STRADUS_COM_SETUP)
@@ -37,6 +41,11 @@ class StradusLaser:
         except SerialTimeoutException:
             print(f"Connected to '{port}' but the device is not responding.")
             raise
+
+        # Setup based on the kwds passed in
+        if modulation_mode != None: self.set_modulation_mode(modulation_mode)
+        if driver_control_mode != None: self.set_laser_driver_control_mode(driver_control_mode)
+        if external_control_mode != None: self.set_external_control(external_control_mode)
 
     # Convenience functions
     def enable(self):
@@ -96,7 +105,7 @@ class StradusLaser:
         device_val = BoolVal.ON if state else BoolVal.OFF
         self.set(Cmd.ExternalPowerControl, device_val)
 
-    def get_max_power(self):
+    def get_max_setpoint(self):
         """Get maximum laser power"""
         return self.get(Query.MaximumLaserPower)
 
@@ -116,7 +125,7 @@ class StradusLaser:
             fault_code = fault_code >> 1
             return faults
 
-    def set_power(self, value):
+    def set_setpoint(self, value):
         """Set power. If in digital modulation mode set pulse power else set power"""
 
         if self.get(Query.PulseMode) == '1':
@@ -124,7 +133,7 @@ class StradusLaser:
         else:
             self.set(Cmd.LaserPower, value)
 
-    def get_power(self):
+    def get_setpoint(self):
         """Get power set point. If in digital modulation mode return peak power else return set power"""
 
         if self.get(Query.PulseMode) == '1':
